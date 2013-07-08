@@ -6,16 +6,8 @@ import scala.concurrent.duration._
 import scattergather.QueryResponse
 import scala.language.postfixOps
 
-object Defaults {
-  val badQueryResponse = QueryResponse(Seq.empty, true)
-}
-
-// Some additional messages
-case object TimedOut
-case object Success
-
 // Disables queries from going through if more than
-class FrontEndThrottler(tree: ActorRef, dispatcher:String) extends Actor {
+class FrontEndThrottlerAsk(tree: ActorRef, dispatcher:String) extends Actor {
   // Value used to determine if circuit-breaker should be used
   var badQueryCount: Int = 0
 
@@ -24,9 +16,9 @@ class FrontEndThrottler(tree: ActorRef, dispatcher:String) extends Actor {
 
   def receive: Receive = {
     case q: SearchQuery =>
-      issueQuery(scattergather.SearchQuery(q.query, q.maxDocs, sender))
-    case q: scattergather.SearchQuery =>
-      issueQuery(q)
+      issueQuery(scattergather.SearchQueryAsk(q.query, q.maxDocs),sender)
+    case q: scattergather.SearchQueryAsk =>
+      issueQuery(q,sender)
     case TimedOut =>
       Console.println("Query timeout!")
       badQueryCount += 1
@@ -35,40 +27,21 @@ class FrontEndThrottler(tree: ActorRef, dispatcher:String) extends Actor {
       if(badQueryCount > 0) badQueryCount -= 1
   }
 
-  def issueQuery(q: scattergather.SearchQuery): Unit =
+  def issueQuery(q: scattergather.SearchQueryAsk,sender: ActorRef): Unit =
     if(badQueryCount > 10) {
       Console.println("Fail whale!")
       // Slowly lower count until we're back to normal and allow some through.
       badQueryCount -= 1
-      q.gatherer ! Defaults.badQueryResponse
+      sender ! Defaults.badQueryResponse
     }
     else {
       val timeout = currentTimeout
       val timer =
         // One-off timer for responses
         context.actorOf(Props(new QueryTimer(timeout,
-                                             q.gatherer,
+                                             sender,
                                              self,
                                              Defaults.badQueryResponse)).withDispatcher(dispatcher))
       tree ! scattergather.SearchQuery(q.query, q.maxDocs, timer)
     }
-}
-
-
-
-class QueryTimer(timeout: Duration, to: ActorRef, throttler: ActorRef, default: QueryResponse) extends Actor {
-
-  // Let me know if I've not received a message in this amount of time
-  context.setReceiveTimeout(timeout)
-
-  def receive: Receive = {
-    case x: scattergather.QueryResponse =>
-      throttler ! Success
-      to ! x
-      context stop self
-    case ReceiveTimeout =>
-      throttler ! TimedOut
-      to ! default
-      context stop self
-  }
 }

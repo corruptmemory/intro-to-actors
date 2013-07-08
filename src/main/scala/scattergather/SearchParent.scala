@@ -9,11 +9,10 @@ trait SearchParent { self: AdaptiveSearchNode =>
  var currentIdx = 0
  def parentNode: PartialFunction[Any, Unit] = {
     case SearchQuery(q, max, responder) =>
-        // TODO - use gatherer scheduler
         val gatherer = context.actorOf(Props(new GathererNode(maxDocs = max,
-            maxResponses = children.size,
-            query = q,
-          client = responder)).withDispatcher(context.dispatcher.id))
+                                                              maxResponses = children.size,
+                                                              query = q,
+                                                              client = responder)).withDispatcher("search-tree-dispatcher"))
         for (node <- children) {
           node ! SearchQuery(q, max, gatherer)
         }
